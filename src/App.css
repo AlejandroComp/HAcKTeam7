@@ -6,7 +6,7 @@
  
   border: 2px solid transparent;
   transition: border-color 0.3s;
-  margin-bottom: 24px;
+  margin-top: 30px;
 
   &:hover {
     border-color: var(--accent-border);
@@ -165,11 +165,14 @@
   }
 }
 
-
+.title {
+  color: rgb(244, 243, 243);
+  -webkit-text-stroke: 2px rgb(241, 14, 14);
+}
 
 
 .bruh {
-  border: 5px solid rgb(16, 109, 15);
+  border: 5px solid rgb(0, 0, 0);
   border-radius: 10px;
 }
 
@@ -181,8 +184,15 @@
 .introductions {
   max-width: 800px;
   margin-top: 50px;
-  margin-left: 50px;
+  margin: 50px auto 0;
   text-align: left;
+
+  background-color: rgba(238, 213, 166, 0.92);
+  color: #21160d;
+
+  padding: 25px;
+  border: 2px solid #4b321d;
+  border-radius: 10px;
 }
 .ticks {
   position: relative;
@@ -232,4 +242,108 @@ body,
   background-position: center;
   background-repeat: no-repeat;
   background-attachment: fixed;
+}
+.imageArea {
+  position: relative;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.guitarSticker {
+  position: absolute;
+  width: 140px;
+  height: auto;
+  top: 50%;
+}
+
+.guitarLeft {
+  left: -350px;
+  transform: translateY(20%) rotate(-10deg);
+}
+
+.guitarRight {
+  right: -350px;
+  transform: translateY(20%) scaleX(-1) rotate(-10deg);
+}
+.counterArea {
+  position: relative;
+  display: inline-block;
+}
+
+.clickNote {
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  pointer-events: none;
+
+  animation: notePop 0.25s ease-out;
+}
+
+.bigNote {
+  width: 60px;
+}
+
+.smallNote {
+  width: 40px;
+}
+
+@keyframes notePop {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 10px) scale(0.5);
+  }
+
+  40% {
+    opacity: 1;
+    transform: translate(-50%, -5px) scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -25px) scale(1);
+  }
+}
+.guitarNote {
+  position: absolute;
+  top: 25px;
+  z-index: 10;
+  pointer-events: none;
+  animation: guitarNotePop 0.25s ease-out;
+}
+
+.guitarNoteLeft {
+  left: -250px;
+  top: 230px;
+}
+
+.guitarNoteRight {
+  right: -250px;
+  top: 230px;
+}
+
+.bigNote {
+  width: 60px;
+}
+
+.smallNote {
+  width: 60px;
+}
+
+@keyframes guitarNotePop {
+  0% {
+    opacity: 0;
+    transform: translateY(15px) scale(0.5);
+  }
+
+  40% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateY(-35px) scale(1);
+  }
 }
