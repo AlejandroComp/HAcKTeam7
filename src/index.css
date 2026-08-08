@@ -6,11 +6,11 @@ body {
 :root {
   --text: #6b6375;
   --text-h: #08060d;
-  --bg: #248fa1;
+  --bg: #33d396;
   --border: #f01414;
   --code-bg: #f4f3ec;
   --accent: #aa3bff;
-  --accent-bg: rgb(21, 232, 247);
+  --accent-bg: rgb(202, 247, 21);
   --accent-border: rgba(170, 59, 255, 0.5);
   --social-bg: rgba(244, 243, 236, 0.5);
   --shadow:
@@ -39,12 +39,11 @@ body {
   :root {
     --text: #010101;
     --text-h: #df0b12d0;
-    --bg: #87dee5;
     --border: #2e303a;
     --code-bg: #1f2028;
-    --accent: #c084fc;
+    --accent: #9a5520;
     --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
+    --accent-border: rgba(252, 198, 132, 0.5);
     --social-bg: rgba(47, 48, 58, 0.5);
     --shadow:
       rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;

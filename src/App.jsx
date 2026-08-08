@@ -4,6 +4,7 @@ import viteLogo from './assets/vite.svg'
 import heroImg from './assets/hero.png'
 import jazz from './assets/teamsevenfreq.png'
 import teamphoto from './assets/teamphoto.jpg'
+import paperBackground from './assets/sheet-music-texture.jpg'
 import './App.css'
 
 
@@ -12,7 +13,10 @@ function App() {
   const [count, setCount] = useState(0)
 
   return (
-    <>
+     <div
+    className="page"
+    style={{ backgroundImage: `url(${paperBackground})` }}
+    >
       <section id="center">
         
       <div className="picture">
@@ -71,7 +75,7 @@ function App() {
 
     <div className="ticks"></div>
       <section id="spacer"></section>
-    </>
+    </div>
   )
 }
 
