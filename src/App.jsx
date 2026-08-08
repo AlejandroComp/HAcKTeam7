@@ -19,8 +19,8 @@ function App() {
   <img
     src={jazz}
     className="bruh"
-    width="300"
-    height="300"
+    width="450"
+    height="450"
     alt=""
   />
 </div>
@@ -49,8 +49,27 @@ function App() {
       </section>
 
       <div className="ticks"></div>
-      
-      <div className="ticks"></div>
+      <div className="introductions">
+  <h2>Meet The Squad</h2>
+
+  <p>
+    <strong> Sebastian Ruesta (Bottom Right:)</strong> Hi, I'm Sebastian an electrical engineering Pre Ops participant from Pierce College. My favorite hobby is playing video games
+  </p>
+
+  <p>
+    <strong>Isaac Adegboye (Top Right):</strong> Hi I'm Isaac, an incoming Mechanical Engineering transfer from LA Trade Tech College. My favorite hobbies are archery, cars, soccer, and working out!
+  </p>
+
+  <p>
+    <strong>Htet Lwin (Bottom Left):</strong> Hi I'm Htet, an incoming Computer Engineering transfer from College of San Mateo. My favorite hobbies are music, soccer, watching horror films.
+  </p>
+
+  <p>
+    <strong>Alejandro Villalta (Top Left):</strong> Hi, I'm Alejandro, an electrical engineering Pre Ops participant from El Camino College. My favorite hobbies are cooking and going to the gym
+  </p>
+</div>
+
+    <div className="ticks"></div>
       <section id="spacer"></section>
     </>
   )

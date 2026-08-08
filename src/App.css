@@ -167,13 +167,20 @@
 
 
 .bruh {
-  border: 5px solid rgb(82, 195, 81);
+  border: 5px solid rgb(16, 109, 15);
   border-radius: 10px;
 }
 
 .tm {
   border: 5px solid rgb(0, 0, 0);
   border-radius: 5px;
+}
+
+.introductions {
+  max-width: 800px;
+  margin-top: 50px;
+  margin-left: 50px;
+  text-align: left;
 }
 .ticks {
   position: relative;
