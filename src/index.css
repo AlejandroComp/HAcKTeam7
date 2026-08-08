@@ -6,7 +6,7 @@ body {
 :root {
   --text: #6b6375;
   --text-h: #08060d;
-  --bg: #1dd4f4;
+  --bg: #248fa1;
   --border: #f01414;
   --code-bg: #f4f3ec;
   --accent: #aa3bff;
@@ -38,8 +38,8 @@ body {
 @media (prefers-color-scheme: dark) {
   :root {
     --text: #9ca3af;
-    --text-h: #cf090c;
-    --bg: #47ddeb;
+    --text-h: #df0b12d0;
+    --bg: #87dee5;
     --border: #2e303a;
     --code-bg: #1f2028;
     --accent: #c084fc;
