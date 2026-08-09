@@ -37,6 +37,8 @@ BANK_DIR = "/guitar_bank"
 
 FX_DIR = "/airfret_fx"
 
+NOTE_FX_DIR = "/note_fx"
+
 
 # ============================================================
 # KEYPAD
@@ -182,94 +184,76 @@ oled = ssd1306.SSD1306_I2C(
 
 
 # ============================================================
-# RIGHT-HAND MPU6050 GYRO STRUMMING
+# RIGHT-HAND MPU6050 - SIMPLE FIXED-X STRUM
 # ============================================================
 #
-# The MPU6050 shares the OLED I2C bus:
+# Final simplified detector:
+#   - X gyro only in SOFTWARE
+#   - Y/Z ignored
+#   - no accelerometer conditions
+#   - no angle calculations
+#   - no center gate
+#   - no auto-axis detection
 #
-# MPU VCC -> Pico 3V3
-# MPU GND -> Pico GND
-# MPU SDA -> GP20
-# MPU SCL -> GP21
+# A strum requires:
+#   1) GX crosses +/-190 dps
+#   2) it stays across the threshold for 2 consecutive reads
 #
-# Joystick LEFT / RIGHT still changes chords.
-# Joystick UP / DOWN no longer strums.
+# After a strum:
+#   - detector stays locked until |GX| <= 35 dps
+#     continuously for 45 ms
 #
-# AUTO chooses whichever gyro axis has the strongest motion.
-# If you later want to lock it to one axis, change to:
-# "X", "Y", or "Z".
+# +GX = DOWN
+# -GX = UP
+# keypad 9 can reverse the mapping if needed.
 # ============================================================
-
-GYRO_AXIS = "AUTO"
-
-# If physical UP and DOWN are backwards:
-# either set this True or press keypad 9 while in Chord Mode.
-GYRO_REVERSE = False
-
-# ============================================================
-# INTENTIONAL STRUM TUNING
-# ============================================================
-#
-# Higher trigger = less sensitive.
-# We also require several consecutive readings in the same
-# direction before a strum is accepted.
-# ============================================================
-
-GYRO_TRIGGER_DPS = 220
-GYRO_RESET_DPS = 55
-
-GYRO_READ_INTERVAL_MS = 8
-GYRO_LOCKOUT_MS = 130
-
-# Require a real swing, not one noisy spike.
-GYRO_CONFIRM_READS = 3
-
-# Hand must become calm for this long before the next strum.
-GYRO_REARM_STILL_MS = 70
-
-# Dominant axis must be clearly stronger than the other axes.
-# 140 means strongest axis must be at least 1.40x the 2nd strongest.
-GYRO_DOMINANCE_PERCENT = 140
 
 MPU_PWR_MGMT_1 = 0x6B
 MPU_GYRO_CONFIG = 0x1B
 MPU_GYRO_XOUT_H = 0x43
 
+# +/-1000 dps
+GYRO_SCALE = 32.8
+
+GYRO_READ_INTERVAL_MS = 6
+
+GYRO_TRIGGER_DPS = 190.0
+GYRO_RESET_DPS = 35.0
+GYRO_RESET_TIME_MS = 45
+GYRO_CONFIRM_READS = 2
+
+GYRO_REVERSE = False
+
 gyro_enabled = False
 gyro_addr = None
 
-gyro_buffer = bytearray(6)
+gyro_buffer = bytearray(2)
 
-gyro_bias_x = 0
-gyro_bias_y = 0
-gyro_bias_z = 0
+gyro_bias_x = 0.0
 
 gyro_armed = True
+gyro_reset_start = None
+
+gyro_candidate_direction = 0
+gyro_candidate_reads = 0
+
 last_gyro_read_time = 0
-last_gyro_strum_time = 0
-
-# Candidate gesture confirmation.
-gyro_candidate_sign = 0
-gyro_candidate_count = 0
-
-# Re-arm timing.
-gyro_still_start_time = None
 
 
 def gyro_signed16(high, low):
 
     value = (
-        high << 8
-    ) | low
+        (high << 8)
+        | low
+    )
 
     if value & 0x8000:
-
         value -= 65536
 
     return value
 
 
-def read_gyro_raw():
+def read_gyro_x():
 
     oled_i2c.readfrom_mem_into(
         gyro_addr,
@@ -277,19 +261,13 @@ def read_gyro_raw():
         gyro_buffer
     )
 
+    raw = gyro_signed16(
+        gyro_buffer[0],
+        gyro_buffer[1]
+    )
+
     return (
-        gyro_signed16(
-            gyro_buffer[0],
-            gyro_buffer[1]
-        ),
-        gyro_signed16(
-            gyro_buffer[2],
-            gyro_buffer[3]
-        ),
-        gyro_signed16(
-            gyro_buffer[4],
-            gyro_buffer[5]
-        )
+        raw / GYRO_SCALE
     )
 
 
@@ -297,12 +275,17 @@ def initialize_gyro():
 
     global gyro_enabled
     global gyro_addr
-
     global gyro_bias_x
-    global gyro_bias_y
-    global gyro_bias_z
+
+    global gyro_armed
+    global gyro_reset_start
+    global gyro_candidate_direction
+    global gyro_candidate_reads
+    global last_gyro_read_time
+
 
     devices = oled_i2c.scan()
+
 
     if 0x68 in devices:
 
@@ -323,7 +306,7 @@ def initialize_gyro():
         return
 
 
-    # Wake MPU6050.
+    # Wake sensor.
     oled_i2c.writeto_mem(
         gyro_addr,
         MPU_PWR_MGMT_1,
@@ -335,11 +318,11 @@ def initialize_gyro():
     )
 
 
-    # +/-500 degrees/second range.
+    # +/-1000 dps.
     oled_i2c.writeto_mem(
         gyro_addr,
         MPU_GYRO_CONFIG,
-        b"\x08"
+        b"\x10"
     )
 
     time.sleep_ms(
@@ -347,51 +330,77 @@ def initialize_gyro():
     )
 
 
+    print()
     print(
         "GYRO:",
         hex(gyro_addr)
     )
 
     print(
-        "HOLD RIGHT HAND STILL..."
+        "SIMPLE FIXED-X STRUM"
+    )
+
+    print(
+        "HOLD PICK STILL FOR 1 SECOND..."
     )
 
 
-    # Calibrate zero-rate bias.
-    sx = 0
-    sy = 0
-    sz = 0
-
-    count = 60
+    sample_count = 140
+    total = 0.0
 
 
     for _ in range(
-        count
+        sample_count
     ):
 
-        gx, gy, gz = (
-            read_gyro_raw()
-        )
-
-        sx += gx
-        sy += gy
-        sz += gz
+        total += read_gyro_x()
 
         time.sleep_ms(
-            5
+            7
         )
 
 
-    gyro_bias_x = sx // count
-    gyro_bias_y = sy // count
-    gyro_bias_z = sz // count
+    gyro_bias_x = (
+        total
+        / sample_count
+    )
 
+
+    gyro_armed = True
+    gyro_reset_start = None
+
+    gyro_candidate_direction = 0
+    gyro_candidate_reads = 0
+
+    last_gyro_read_time = (
+        time.ticks_ms()
+    )
 
     gyro_enabled = True
+
+
+    print(
+        "GX BIAS: %.2f dps"
+        % gyro_bias_x
+    )
+
+    print(
+        "TRIGGER: %.0f dps x %d reads"
+        % (
+            GYRO_TRIGGER_DPS,
+            GYRO_CONFIRM_READS
+        )
+    )
+
+    print(
+        "+GX = DOWN | -GX = UP"
+    )
 
     print(
         "GYRO READY"
     )
+
+    print()
 
 
 def toggle_gyro_reverse():
@@ -412,17 +421,20 @@ def toggle_gyro_reverse():
         "ON" if GYRO_REVERSE else "OFF"
     )
 
+    update_oled()
+
 
 def service_gyro_strum():
 
     global gyro_armed
-    global last_gyro_read_time
-    global last_gyro_strum_time
-    global strum_direction
+    global gyro_reset_start
 
-    global gyro_candidate_sign
-    global gyro_candidate_count
-    global gyro_still_start_time
+    global gyro_candidate_direction
+    global gyro_candidate_reads
+
+    global last_gyro_read_time
+
+    global strum_direction
 
 
     if (
@@ -449,8 +461,9 @@ def service_gyro_strum():
 
     try:
 
-        gx, gy, gz = (
-            read_gyro_raw()
+        gx = (
+            read_gyro_x()
+            - gyro_bias_x
         )
 
     except OSError:
@@ -458,240 +471,122 @@ def service_gyro_strum():
         return
 
 
-    # +/-500 dps sensitivity is ~65.5 counts/dps.
-    x = (
-        gx - gyro_bias_x
-    ) / 65.5
+    if GYRO_REVERSE:
 
-    y = (
-        gy - gyro_bias_y
-    ) / 65.5
-
-    z = (
-        gz - gyro_bias_z
-    ) / 65.5
+        gx = -gx
 
 
-    # --------------------------------------------------------
-    # DETERMINE MOTION AXIS
-    # --------------------------------------------------------
+    # ========================================================
+    # ARMED: LOOK FOR A REAL STRUM
+    # ========================================================
 
-    if GYRO_AXIS == "X":
+    if gyro_armed:
 
-        motion = x
-        strongest = abs(x)
-        second = max(
-            abs(y),
-            abs(z)
-        )
-
-    elif GYRO_AXIS == "Y":
-
-        motion = y
-        strongest = abs(y)
-        second = max(
-            abs(x),
-            abs(z)
-        )
-
-    elif GYRO_AXIS == "Z":
-
-        motion = z
-        strongest = abs(z)
-        second = max(
-            abs(x),
-            abs(y)
-        )
-
-    else:
-
-        values = [
-            x,
-            y,
-            z
-        ]
-
-        abs_values = [
-            abs(x),
-            abs(y),
-            abs(z)
-        ]
-
-        strongest_index = 0
-
-        if abs_values[1] > abs_values[strongest_index]:
-
-            strongest_index = 1
-
-        if abs_values[2] > abs_values[strongest_index]:
-
-            strongest_index = 2
+        direction_now = 0
 
 
-        motion = values[
-            strongest_index
-        ]
+        if gx >= GYRO_TRIGGER_DPS:
 
-        strongest = abs_values[
-            strongest_index
-        ]
-
-        other_values = [
-            abs_values[i]
-            for i in range(3)
-            if i != strongest_index
-        ]
-
-        second = max(
-            other_values
-        )
+            direction_now = 1
 
 
-    # --------------------------------------------------------
-    # RE-ARM ONLY AFTER THE WRIST REALLY SETTLES
-    # --------------------------------------------------------
+        elif gx <= -GYRO_TRIGGER_DPS:
 
-    if not gyro_armed:
-
-        calm = (
-            max(
-                abs(x),
-                abs(y),
-                abs(z)
-            )
-            <= GYRO_RESET_DPS
-        )
+            direction_now = -1
 
 
-        if calm:
+        if direction_now == 0:
 
-            if gyro_still_start_time is None:
+            gyro_candidate_direction = 0
+            gyro_candidate_reads = 0
 
-                gyro_still_start_time = now
 
-            elif time.ticks_diff(
-                now,
-                gyro_still_start_time
-            ) >= GYRO_REARM_STILL_MS:
+        elif (
+            direction_now
+            == gyro_candidate_direction
+        ):
 
-                gyro_armed = True
+            gyro_candidate_reads += 1
 
-                gyro_candidate_sign = 0
-                gyro_candidate_count = 0
-                gyro_still_start_time = None
 
         else:
 
-            gyro_still_start_time = None
+            gyro_candidate_direction = (
+                direction_now
+            )
+
+            gyro_candidate_reads = 1
 
 
-        return
-
-
-    # --------------------------------------------------------
-    # IGNORE WEAK / MESSY MOTION
-    # --------------------------------------------------------
-
-    if strongest < GYRO_TRIGGER_DPS:
-
-        gyro_candidate_sign = 0
-        gyro_candidate_count = 0
-
-        return
-
-
-    # Reject movements where several axes are equally strong.
-    # Intentional guitar-like strums usually have one dominant
-    # rotational axis.
-    if second > 0:
-
-        dominance = (
-            strongest * 100
-            // second
-        )
-
-        if dominance < GYRO_DOMINANCE_PERCENT:
-
-            gyro_candidate_sign = 0
-            gyro_candidate_count = 0
+        if (
+            gyro_candidate_reads
+            < GYRO_CONFIRM_READS
+        ):
 
             return
 
 
-    # --------------------------------------------------------
-    # REQUIRE SAME DIRECTION FOR MULTIPLE READS
-    # --------------------------------------------------------
+        # ====================================================
+        # CONFIRMED STRUM
+        # ====================================================
 
-    sign = (
-        1
-        if motion > 0
-        else -1
-    )
+        if gyro_candidate_direction > 0:
 
+            strum_direction = "DOWN"
 
-    if sign == gyro_candidate_sign:
+        else:
 
-        gyro_candidate_count += 1
-
-    else:
-
-        gyro_candidate_sign = sign
-        gyro_candidate_count = 1
+            strum_direction = "UP"
 
 
-    if gyro_candidate_count < GYRO_CONFIRM_READS:
-
-        return
-
-
-    # --------------------------------------------------------
-    # EXTRA TIME LOCKOUT
-    # --------------------------------------------------------
-
-    if time.ticks_diff(
-        now,
-        last_gyro_strum_time
-    ) < GYRO_LOCKOUT_MS:
-
-        return
-
-
-    # --------------------------------------------------------
-    # CONFIRMED INTENTIONAL STRUM
-    # --------------------------------------------------------
-
-    positive_motion = (
-        sign > 0
-    )
-
-
-    if GYRO_REVERSE:
-
-        positive_motion = (
-            not positive_motion
+        print(
+            "STRUM %-4s | %4d dps"
+            % (
+                strum_direction,
+                int(gx)
+            )
         )
 
 
-    if positive_motion:
+        # Use the existing clean guitar playback.
+        start_strum()
 
-        strum_direction = "DOWN"
+
+        gyro_armed = False
+
+        gyro_reset_start = None
+
+        gyro_candidate_direction = 0
+        gyro_candidate_reads = 0
+
+        return
+
+
+    # ========================================================
+    # LOCKED: WAIT FOR WRIST TO SLOW BEFORE RE-ARM
+    # ========================================================
+
+    if abs(gx) <= GYRO_RESET_DPS:
+
+
+        if gyro_reset_start is None:
+
+            gyro_reset_start = now
+
+
+        elif time.ticks_diff(
+            now,
+            gyro_reset_start
+        ) >= GYRO_RESET_TIME_MS:
+
+            gyro_armed = True
+
+            gyro_reset_start = None
+
 
     else:
 
-        strum_direction = "UP"
-
-
-    # Start audio immediately.
-    start_strum()
-
-
-    last_gyro_strum_time = now
-
-    gyro_armed = False
-
-    gyro_candidate_sign = 0
-    gyro_candidate_count = 0
-    gyro_still_start_time = None
+        gyro_reset_start = None
 
 
 CHORD_DISPLAY = {
@@ -1058,8 +953,43 @@ effect_index = 0
 NOTE_EFFECTS = [
     "CLEAN",
     "OCTAVE",
+    "SYNTH",
+    "WAH",
+    "LASER"
+]
+
+
+# Only these three are synthesized into RAM at boot.
+# WAH uses pre-rendered RAW files from flash.
+BUFFERED_NOTE_EFFECTS = [
+    "CLEAN",
+    "OCTAVE",
     "SYNTH"
 ]
+
+
+WAH_NOTE_FILES = {
+    "1": NOTE_FX_DIR + "/WAH_C4.raw",
+    "2": NOTE_FX_DIR + "/WAH_D4.raw",
+    "3": NOTE_FX_DIR + "/WAH_E4.raw",
+    "4": NOTE_FX_DIR + "/WAH_F4.raw",
+    "5": NOTE_FX_DIR + "/WAH_G4.raw",
+    "6": NOTE_FX_DIR + "/WAH_A4.raw",
+    "7": NOTE_FX_DIR + "/WAH_B4.raw",
+    "8": NOTE_FX_DIR + "/WAH_C5.raw"
+}
+
+
+LASER_NOTE_FILES = {
+    "1": NOTE_FX_DIR + "/LASER_C4.raw",
+    "2": NOTE_FX_DIR + "/LASER_D4.raw",
+    "3": NOTE_FX_DIR + "/LASER_E4.raw",
+    "4": NOTE_FX_DIR + "/LASER_F4.raw",
+    "5": NOTE_FX_DIR + "/LASER_G4.raw",
+    "6": NOTE_FX_DIR + "/LASER_A4.raw",
+    "7": NOTE_FX_DIR + "/LASER_B4.raw",
+    "8": NOTE_FX_DIR + "/LASER_C5.raw"
+}
 
 note_effect_index = 0
 
@@ -1081,6 +1011,9 @@ def current_effect():
 def next_note_effect():
 
     global note_effect_index
+
+
+    stop_stream()
 
     note_effect_index += 1
 
@@ -1106,6 +1039,9 @@ def next_note_effect():
 def previous_note_effect():
 
     global note_effect_index
+
+
+    stop_stream()
 
     note_effect_index -= 1
 
@@ -1855,7 +1791,7 @@ def build_notes():
     )
 
 
-    for effect in NOTE_EFFECTS:
+    for effect in BUFFERED_NOTE_EFFECTS:
 
         print(
             "Building note FX:",
@@ -1989,7 +1925,7 @@ MAIN_RING_BYTES = ms_to_mono_bytes(
 )
 
 
-MONO_CHUNK_BYTES = 256
+MONO_CHUNK_BYTES = 512
 
 
 # 512 mono bytes
@@ -2313,10 +2249,6 @@ def service_audio():
 
     global audio_file
     global audio_active
-    global audio_position_bytes
-    global sustain_active
-    global sustain_pass_index
-    global sustain_gain
 
 
     if not audio_active:
@@ -2324,112 +2256,22 @@ def service_audio():
         return
 
 
-    # --------------------------------------------------------
-    # ORIGINAL NATURAL STRUM
-    # --------------------------------------------------------
-    # At ~1.15 s, move into a quiet ringing tail before the
-    # bank's final fade reaches silence.
-    # --------------------------------------------------------
-
-    if (
-        not sustain_active
-        and audio_position_bytes
-        >= MAIN_RING_BYTES
-    ):
-
-        sustain_pass_index = 0
-
-        if not start_sustain_pass():
-
-            stop_stream()
-
-            update_oled()
-
-            return
-
-
-    # --------------------------------------------------------
-    # SUSTAIN PASS BOUNDARY
-    # --------------------------------------------------------
-
-    if sustain_active:
-
-        start_ms, end_ms, gain = (
-            SUSTAIN_PASSES[
-                sustain_pass_index
-            ]
-        )
-
-        end_byte = ms_to_mono_bytes(
-            end_ms
-        )
-
-        if audio_position_bytes >= end_byte:
-
-            sustain_pass_index += 1
-
-            if sustain_pass_index >= len(
-                SUSTAIN_PASSES
-            ):
-
-                stop_stream()
-
-                update_oled()
-
-                return
-
-
-            if not start_sustain_pass():
-
-                stop_stream()
-
-                update_oled()
-
-                return
-
-
-            start_ms, end_ms, gain = (
-                SUSTAIN_PASSES[
-                    sustain_pass_index
-                ]
-            )
-
-            end_byte = ms_to_mono_bytes(
-                end_ms
-            )
-
-
-        remaining = (
-            end_byte
-            - audio_position_bytes
-        )
-
-        read_size = min(
-            MONO_CHUNK_BYTES,
-            remaining
-        )
-
-
-    else:
-
-        remaining = (
-            MAIN_RING_BYTES
-            - audio_position_bytes
-        )
-
-        read_size = min(
-            MONO_CHUNK_BYTES,
-            remaining
-        )
-
-
-    if read_size <= 0:
-
-        return
-
+    # ========================================================
+    # PROVEN CLEAN GUITAR STREAM
+    # ========================================================
+    #
+    # IMPORTANT:
+    # Do NOT process chord samples in Python here.
+    #
+    # Read the original signed 16-bit mono RAW bytes and copy
+    # each sample directly to Left + Right.
+    #
+    # This is the same architecture that previously gave the
+    # clean AirFret guitar sound.
+    # ========================================================
 
     data = audio_file.read(
-        read_size
+        MONO_CHUNK_BYTES
     )
 
 
@@ -2452,17 +2294,8 @@ def service_audio():
         length -= 1
 
 
-    audio_position_bytes += (
-        length
-    )
-
-
     out = 0
 
-
-    # --------------------------------------------------------
-    # MONO 16-BIT -> RING LEVEL -> MASTER VOLUME -> STEREO
-    # --------------------------------------------------------
 
     for i in range(
         0,
@@ -2470,45 +2303,11 @@ def service_audio():
         2
     ):
 
-        sample = (
-            data[i]
-            | (
-                data[i + 1]
-                << 8
-            )
-        )
+        low_byte = data[i]
 
-
-        if sample >= 32768:
-
-            sample -= 65536
-
-
-        # During the extra ringing tail only, gradually lower
-        # the reused natural decay section.
-        if sustain_active:
-
-            sample = (
-                sample
-                * sustain_gain
-            ) >> 8
-
-
-        # Existing master volume knob remains unchanged.
-        sample = (
-            sample
-            * volume_gain
-        ) >> 8
-
-
-        low_byte = (
-            sample & 0xFF
-        )
-
-        high_byte = (
-            (sample >> 8)
-            & 0xFF
-        )
+        high_byte = data[
+            i + 1
+        ]
 
 
         stereo_buffer[
@@ -2557,6 +2356,17 @@ def service_effect_audio():
         return
 
 
+    # ========================================================
+    # CLEAN DIRECT EFFECT STREAM
+    # ========================================================
+    #
+    # WAH / PLUCK / WHIP are already pre-rendered RAW files.
+    # Do NOT run sample-by-sample DSP on the Pico.
+    #
+    # Just copy each mono 16-bit sample directly to L + R,
+    # exactly like the protected clean chord stream.
+    # ========================================================
+
     data = audio_file.read(
         MONO_CHUNK_BYTES
     )
@@ -2590,34 +2400,188 @@ def service_effect_audio():
         2
     ):
 
-        sample = (
-            data[i]
-            | (
-                data[i + 1]
-                << 8
-            )
+        low_byte = data[i]
+
+        high_byte = data[
+            i + 1
+        ]
+
+
+        stereo_buffer[
+            out
+        ] = low_byte
+
+        stereo_buffer[
+            out + 1
+        ] = high_byte
+
+        stereo_buffer[
+            out + 2
+        ] = low_byte
+
+        stereo_buffer[
+            out + 3
+        ] = high_byte
+
+
+        out += 4
+
+
+    audio.write(
+        stereo_view[
+            :out
+        ]
+    )
+
+
+# ============================================================
+# PITCHED WAH NOTE PLAYBACK
+# ============================================================
+#
+# Each key has its own pre-rendered pitched WAH file:
+#
+# 1 C4, 2 D4, 3 E4, 4 F4,
+# 5 G4, 6 A4, 7 B4, 8 C5
+#
+# No real-time pitch shifting or filter DSP happens on the Pico.
+# The file is streamed directly, preserving reliability.
+# ============================================================
+
+def start_sampled_note_effect(
+    key,
+    effect
+):
+
+    global audio_file
+    global audio_active
+    global current_audio_filename
+    global audio_position_bytes
+    global sustain_active
+    global sustain_pass_index
+    global sustain_gain
+
+
+    stop_stream()
+
+
+    if effect == "WAH":
+
+        filename = (
+            WAH_NOTE_FILES[
+                key
+            ]
         )
 
+    elif effect == "LASER":
 
-        if sample >= 32768:
-
-            sample -= 65536
-
-
-        sample = (
-            sample
-            * volume_gain
-        ) >> 8
-
-
-        low_byte = (
-            sample & 0xFF
+        filename = (
+            LASER_NOTE_FILES[
+                key
+            ]
         )
 
-        high_byte = (
-            (sample >> 8)
-            & 0xFF
+    else:
+
+        return
+
+
+    try:
+
+        audio_file = open(
+            filename,
+            "rb"
         )
+
+    except OSError:
+
+        print(
+            "MISSING NOTE FX:",
+            filename
+        )
+
+        audio_file = None
+
+        audio_active = False
+
+        return
+
+
+    current_audio_filename = filename
+
+    audio_position_bytes = 0
+
+    sustain_active = False
+
+    sustain_pass_index = 0
+
+    sustain_gain = 256
+
+    audio_active = True
+
+
+    print(
+        effect + " NOTE:",
+        NOTE_KEYS[key][0]
+    )
+
+
+    update_oled(
+        playing=True
+    )
+
+
+def service_sampled_note_effect_audio():
+
+    global audio_file
+    global audio_active
+    global current_note_key
+
+
+    if not audio_active:
+
+        return
+
+
+    data = audio_file.read(
+        MONO_CHUNK_BYTES
+    )
+
+
+    if not data:
+
+        stop_stream()
+
+        current_note_key = None
+
+        update_oled()
+
+        return
+
+
+    length = len(
+        data
+    )
+
+
+    if length & 1:
+
+        length -= 1
+
+
+    out = 0
+
+
+    for i in range(
+        0,
+        length,
+        2
+    ):
+
+        low_byte = data[i]
+
+        high_byte = data[
+            i + 1
+        ]
 
 
         stereo_buffer[
@@ -3100,7 +3064,19 @@ def handle_key_press(
             )
 
 
-            update_oled()
+            if (
+                current_note_effect() == "WAH"
+                or current_note_effect() == "LASER"
+            ):
+
+                start_sampled_note_effect(
+                    key,
+                    current_note_effect()
+                )
+
+            else:
+
+                update_oled()
 
 
     # --------------------------------------------------------
@@ -3336,11 +3312,13 @@ initialize_gyro()
 
 print()
 print("================================")
-print(" AIRFRET - INTENTIONAL GYRO STRUM")
+print(" AIRFRET - SIMPLE FIXED-X STRUM")
 print("================================")
 print()
 
 print("GUITAR BANK: READY")
+print("CHORD AUDIO: CLEAN DIRECT STREAM")
+print("FX AUDIO: CLEAN DIRECT STREAM")
 print()
 
 print("* = NOTE MODE")
@@ -3351,7 +3329,7 @@ print()
 print("NOTE MODE:")
 print("1-8 = PLAY NOTES")
 print("JOYSTICK LEFT / RIGHT = CHANGE NOTE FX")
-print("NOTE FX: CLEAN / OCTAVE / SYNTH")
+print("NOTE FX: CLEAN / OCTAVE / SYNTH / WAH / LASER")
 print()
 
 print("CHORD MODE:")
@@ -3376,7 +3354,7 @@ print("FX: PRESS = PLAY EFFECT")
 print("# = RETURN TO CHORD MODE")
 print()
 
-print("9 = REVERSE GYRO UP/DOWN")
+print("9 = EMERGENCY REVERSE GYRO DIRECTION")
 print()
 
 print("VOLUME SLIDER: GP26 / ADC0")
@@ -3448,6 +3426,12 @@ while True:
 
             and key
             == current_note_key
+
+            and current_note_effect()
+            != "WAH"
+
+            and current_note_effect()
+            != "LASER"
         ):
 
 
@@ -3516,6 +3500,18 @@ while True:
     # ========================================================
     # NOTE MODE
     # ========================================================
+
+    elif (
+        mode == "NOTE"
+        and (
+            current_note_effect() == "WAH"
+            or current_note_effect() == "LASER"
+        )
+        and audio_active
+    ):
+
+        service_sampled_note_effect_audio()
+
 
     elif (
         mode == "NOTE"
