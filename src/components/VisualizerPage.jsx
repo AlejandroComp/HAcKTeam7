@@ -18,9 +18,19 @@ function friendly(value) {
   return FRIENDLY_NAMES[value] ?? value.replaceAll('_', ' ')
 }
 
+function getWebSocketAddress() {
+  if (import.meta.env.VITE_AIRFRET_WS_URL) {
+    return import.meta.env.VITE_AIRFRET_WS_URL
+  }
+
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const hostname = window.location.hostname || 'localhost'
+  return `${protocol}//${hostname}:8765`
+}
+
 export default function VisualizerPage() {
   const [connection, setConnection] = useState('disconnected')
-  const [connectionMessage, setConnectionMessage] = useState('Demo signal active')
+  const [connectionMessage, setConnectionMessage] = useState('Network bridge disconnected')
   const [mode, setMode] = useState('NOTE')
   const [noteFx, setNoteFx] = useState('CLEAN')
   const [activeNote, setActiveNote] = useState('—')
@@ -38,15 +48,14 @@ export default function VisualizerPage() {
   const [soundCount, setSoundCount] = useState(0)
   const [showBurst, setShowBurst] = useState(false)
 
-  const portRef = useRef(null)
-  const readerRef = useRef(null)
+  const socketRef = useRef(null)
   const soundSequenceRef = useRef(0)
   const noteTimerRef = useRef(null)
   const playingTimerRef = useRef(null)
   const keyTimerRef = useRef(null)
   const navTimerRef = useRef(null)
 
-  const serialSupported = typeof navigator !== 'undefined' && 'serial' in navigator
+  const socketAddress = getWebSocketAddress()
 
   const triggerSoundVisual = useCallback((eventLabel, duration = 1600) => {
     soundSequenceRef.current += 1
@@ -107,6 +116,7 @@ export default function VisualizerPage() {
         setLastEvent('Note effect: ' + friendly(first))
         break
       case 'NOTE_ON':
+        setMode('NOTE')
         setActiveNote(first)
         setNoteFx(second || 'CLEAN')
         triggerSoundVisual(first + ' · ' + friendly(second || 'CLEAN'), null)
@@ -125,6 +135,7 @@ export default function VisualizerPage() {
         setLastEvent('Chord: ' + friendly(first))
         break
       case 'STRUM':
+        setMode('CHORD')
         setStrumDirection(first)
         setChord(second)
         setSelectedScale(third)
@@ -136,6 +147,7 @@ export default function VisualizerPage() {
         setLastEvent('Effect selected: ' + friendly(first))
         break
       case 'EFFECT_PLAY':
+        setMode('FX')
         setEffect(first)
         triggerSoundVisual(friendly(first) + ' effect', 1800)
         break
@@ -157,71 +169,46 @@ export default function VisualizerPage() {
     }
   }, [flashKey, flashNavigation, triggerSoundVisual])
 
-  const readFromPort = useCallback(async (port) => {
-    const decoder = new TextDecoder()
-    let pendingText = ''
+  function connectAirFret() {
+    if (socketRef.current) return
 
-    while (port.readable && portRef.current === port) {
-      const reader = port.readable.getReader()
-      readerRef.current = reader
-      try {
-        while (true) {
-          const { value, done } = await reader.read()
-          if (done) break
-          pendingText += decoder.decode(value, { stream: true })
-          const lines = pendingText.split(/\r?\n/)
-          pendingText = lines.pop() ?? ''
-          lines.forEach(handleAirFretLine)
-        }
-      } catch (error) {
-        if (portRef.current === port) {
-          setConnection('error')
-          setConnectionMessage(error.message || 'Serial connection lost')
-        }
-      } finally {
-        reader.releaseLock()
-        if (readerRef.current === reader) readerRef.current = null
-      }
-    }
-  }, [handleAirFretLine])
+    setConnection('connecting')
+    setConnectionMessage('Connecting to the AirFret network bridge…')
 
-  async function connectAirFret() {
-    if (!serialSupported) {
-      setConnection('error')
-      setConnectionMessage('Use desktop Chrome or Edge for the USB connection')
-      return
-    }
-    try {
-      setConnection('connecting')
-      setConnectionMessage('Choose the Raspberry Pi Pico port')
-      const port = await navigator.serial.requestPort()
-      await port.open({ baudRate: 115200 })
-      portRef.current = port
+    const socket = new WebSocket(socketAddress)
+    socketRef.current = socket
+
+    socket.addEventListener('open', () => {
+      if (socketRef.current !== socket) return
       setConnection('connected')
-      setConnectionMessage('USB connected — AirFret is live')
-      void readFromPort(port)
-    } catch (error) {
+      setConnectionMessage('Network connected — AirFret is live')
+    })
+
+    socket.addEventListener('message', (message) => {
+      String(message.data).split(/\r?\n/).forEach(handleAirFretLine)
+    })
+
+    socket.addEventListener('error', () => {
+      if (socketRef.current !== socket) return
+      setConnection('error')
+      setConnectionMessage('Could not reach the AirFret bridge')
+    })
+
+    socket.addEventListener('close', () => {
+      if (socketRef.current !== socket) return
+      socketRef.current = null
       setConnection('disconnected')
-      setConnectionMessage(
-        error.name === 'NotFoundError'
-          ? 'No port selected — demo mode is still active'
-          : error.message || 'Could not open the Pico port',
-      )
-    }
+      setConnectionMessage('Network bridge disconnected')
+      setIsPlaying(false)
+    })
   }
 
-  async function disconnectAirFret() {
-    const reader = readerRef.current
-    const port = portRef.current
-    portRef.current = null
-    try {
-      if (reader) await reader.cancel()
-      if (port) await port.close()
-    } catch {
-      // The Pico may already be disconnected; resetting the interface is safe.
-    }
+  function disconnectAirFret() {
+    const socket = socketRef.current
+    socketRef.current = null
+    if (socket) socket.close()
     setConnection('disconnected')
-    setConnectionMessage('Demo signal active')
+    setConnectionMessage('Network bridge disconnected')
     setIsPlaying(false)
   }
 
@@ -268,7 +255,9 @@ export default function VisualizerPage() {
     clearTimeout(playingTimerRef.current)
     clearTimeout(keyTimerRef.current)
     clearTimeout(navTimerRef.current)
-    if (readerRef.current) void readerRef.current.cancel()
+    const socket = socketRef.current
+    socketRef.current = null
+    if (socket) socket.close()
   }, [])
 
   const visibleValue = mode === 'NOTE'
@@ -306,12 +295,14 @@ export default function VisualizerPage() {
               onClick={connection === 'connected' ? disconnectAirFret : connectAirFret}
               disabled={connection === 'connecting'}
             >
-              {connection === 'connected' ? 'Disconnect' : connection === 'connecting' ? 'Connecting…' : 'Connect AirFret'}
+              {connection === 'connected' ? 'Disconnect' : connection === 'connecting' ? 'Connecting…' : 'Connect live signal'}
             </button>
           </div>
         </section>
 
-        {!serialSupported && <p className="serialNotice">The USB button needs desktop Chrome or Edge. Demo mode works in every browser.</p>}
+        <p className="serialNotice">
+          Network feed: <code>{socketAddress}</code> · Demo mode remains available without the instrument.
+        </p>
 
         <section className={'performanceDeck ' + (isPlaying ? 'isPlaying' : 'isIdle')}>
           <div className="deckTopline"><span>CH 07 / AIRFRET</span><span>{isPlaying ? 'SIGNAL DETECTED' : 'STANDBY'}</span><span>22.05 kHz</span></div>
