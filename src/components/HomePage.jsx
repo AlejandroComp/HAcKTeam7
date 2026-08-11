@@ -5,6 +5,9 @@ import paperBackground from '../assets/sheet-music-texture.jpg'
 import guitar from '../assets/guitar-sticker.png'
 import musicalNote from '../assets/musical-note.webp'
 import musicNoteSmall from '../assets/nicubunu_Musical_note.webp'
+import newTeamPhoto from '../assets/team-photo-new.jpg'
+import prototypePhoto from '../assets/prototype.jpg'
+import performanceVideo from '../assets/team7-performance.mp4'
 
 const MEMBERS = [
   {
@@ -70,7 +73,34 @@ export default function HomePage() {
         <section className="homeHero">
           <div className="heroCopy">
             <p className="homeKicker"><span /> UCLA HAcK · TEAM 7</p>
-            <h1>We built music <em>you can move.</em></h1>
+            <h1>Battle of The <em>BUILDS!</em></h1>
+            <img
+  src={newTeamPhoto}
+  className="newTeamPhoto"
+  alt="Team 7 at UCLA"
+/>
+<div className="prototypeSection">
+  <h2>Our Prototype</h2>
+
+  <img
+    src={prototypePhoto}
+    className="prototypePhoto"
+    alt="Team 7 instrument prototype"
+  />
+</div>
+<div className="performanceSection">
+  <h2>Our Performance</h2>
+
+  <video
+    className="performanceVideo"
+    controls
+    playsInline
+    preload="metadata"
+  >
+    <source src={performanceVideo} type="video/mp4" />
+    Your browser does not support videos.
+  </video>
+</div>
             <p className="heroSummary">
               AirFret is our motion-controlled digital instrument. A joystick
               chooses the sound, a gyro reads the strum, and our live stage turns
