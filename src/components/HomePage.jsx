@@ -5,8 +5,8 @@ import paperBackground from '../assets/sheet-music-texture.jpg'
 import guitar from '../assets/guitar-sticker.png'
 import musicalNote from '../assets/musical-note.webp'
 import musicNoteSmall from '../assets/nicubunu_Musical_note.webp'
-import newTeamPhoto from '../assets/team-photo-new.jpg'
-import prototypePhoto from '../assets/prototype.jpg'
+import newteamphoto from '../assets/team-photo-new.JPG'
+import prototypePhoto from '../assets/prototype.JPG'
 import performanceVideo from '../assets/team7-performance.mp4'
 
 const MEMBERS = [
